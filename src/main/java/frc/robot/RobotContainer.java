@@ -9,15 +9,24 @@ import static edu.wpi.first.units.Units.*;
 import com.ctre.phoenix6.swerve.SwerveModule.DriveRequestType;
 import com.ctre.phoenix6.swerve.SwerveRequest;
 
+import java.util.Comparator;
+
+import edu.wpi.first.apriltag.AprilTag;
+import edu.wpi.first.apriltag.AprilTagFieldLayout;
+import edu.wpi.first.apriltag.AprilTagFields;
+import edu.wpi.first.math.geometry.Pose2d;
 import edu.wpi.first.math.geometry.Rotation2d;
+import edu.wpi.first.math.geometry.Transform2d;
 import edu.wpi.first.wpilibj2.command.Command;
 import edu.wpi.first.wpilibj2.command.Commands;
 import edu.wpi.first.wpilibj2.command.button.CommandXboxController;
 import edu.wpi.first.wpilibj2.command.button.RobotModeTriggers;
 import edu.wpi.first.wpilibj2.command.sysid.SysIdRoutine.Direction;
 
+import frc.robot.commands.DriveToPose;
 import frc.robot.generated.TunerConstants;
 import frc.robot.subsystems.CommandSwerveDrivetrain;
+import frc.robot.subsystems.Vision;
 
 public class RobotContainer {
     private double MaxSpeed = .1 * TunerConstants.kSpeedAt12Volts.in(MetersPerSecond); // kSpeedAt12Volts desired top speed
@@ -35,6 +44,13 @@ public class RobotContainer {
     private final CommandXboxController joystick = new CommandXboxController(0);
 
     public final CommandSwerveDrivetrain drivetrain = TunerConstants.createDrivetrain();
+
+    /* Placeholder names: must match each Limelight's hostname set in its web UI. */
+    public final Vision vision = new Vision(drivetrain, "limelight-front", "limelight-back");
+
+    private final AprilTagFieldLayout fieldLayout = AprilTagFieldLayout.loadField(AprilTagFields.kDefaultField);
+    /* Distance from the tag to the robot's center when aligned; must be at least half the bumper-to-bumper length. */
+    private static final double kAlignDistanceFromTagMeters = 0.75;
 
     public RobotContainer() {
         configureBindings();
@@ -74,7 +90,20 @@ public class RobotContainer {
         // Reset the field-centric heading on left bumper press.
         joystick.leftBumper().onTrue(drivetrain.runOnce(drivetrain::seedFieldCentric));
 
+        // Hold right bumper to auto-align in front of the nearest AprilTag. Release to take back control.
+        joystick.rightBumper().whileTrue(new DriveToPose(drivetrain, this::poseInFrontOfNearestTag));
+
         drivetrain.registerTelemetry(logger::telemeterize);
+    }
+
+    /** Pose that puts the robot kAlignDistanceFromTagMeters in front of the closest tag, facing it. */
+    private Pose2d poseInFrontOfNearestTag() {
+        var robotTranslation = drivetrain.getState().Pose.getTranslation();
+        Pose2d tagPose = fieldLayout.getTags().stream()
+            .map((AprilTag tag) -> tag.pose.toPose2d())
+            .min(Comparator.comparingDouble(pose -> pose.getTranslation().getDistance(robotTranslation)))
+            .orElseThrow();
+        return tagPose.transformBy(new Transform2d(kAlignDistanceFromTagMeters, 0, Rotation2d.k180deg));
     }
 
     public Command getAutonomousCommand() {
